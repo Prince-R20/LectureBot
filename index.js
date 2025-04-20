@@ -54,6 +54,8 @@ async function startBot() {
   sock.ev.on("messages.upsert", async (msg) => {
     const message = msg.messages[0];
     if (!message.message || message.key.fromMe) return;
+    if (message.key.fromMe || message.message.senderKeyDistributionMessage)
+      return;
 
     const sender = message.key.remoteJid;
     const text =
@@ -120,7 +122,7 @@ async function startBot() {
 
     if (text.toLowerCase() === "hello") {
       await sock.sendMessage(sender, {
-        text: "Hey! 👋 Welcome to *LectureBot* 📚\n\nSend something like *Send MAT101* to receive a note. \n\nPowered by Dev Prince",
+        text: "Hey! 👋 Welcome to *LectureBot* 📚\n\nSend something like *Send MAT101* to receive a note. \n\n```Powered by Dev Prince```",
       });
     }
 
@@ -232,10 +234,9 @@ async function startBot() {
       if (topMatches.length === 1) {
         const match = topMatches[0];
         try {
-          const { data: fileBuffer, error: downloadError } =
-            await supabase.storage
-              .from("lecturebot")
-              .download(match.storage_path);
+          const { data: fileRes, error: downloadError } = await supabase.storage
+            .from("lecturebot")
+            .download(match.storage_path);
 
           if (downloadError) {
             console.error("❌ Error downloading file:", downloadError);
@@ -245,8 +246,11 @@ async function startBot() {
             return;
           }
 
+          const arrayBuffer = await fileRes.arrayBuffer(); // convert Blob to ArrayBuffer
+          const buffer = Buffer.from(arrayBuffer); // convert to Node Buffer
+
           await sock.sendMessage(sender, {
-            document: fileBuffer,
+            document: buffer,
             fileName: match.original_file_name || "file.pdf",
             mimetype: "application/pdf",
           });
@@ -260,7 +264,7 @@ async function startBot() {
         // Multiple top matches – ask user to choose
         let listText = "*📚 Multiple matches found!*\n\n";
         topMatches.forEach((file, idx) => {
-          const desc = file.course_description || "No description";
+          const desc = file.course_code || "No description";
           listText += `${idx + 1}. ${file.original_file_name} (${desc})\n`;
         });
 
@@ -275,52 +279,55 @@ async function startBot() {
 
     // 🟡 Handle response to selection (if user previously asked to choose a file)
     if (awaitingFileSelection.has(sender)) {
-      const { files } = awaitingFileSelection.get(sender);
-      const selectedIndex = parseInt(text.trim());
+      const trimmed = text.trim();
 
-      if (
-        !isNaN(selectedIndex) &&
-        selectedIndex > 0 &&
-        selectedIndex <= files.length
-      ) {
-        const chosenFile = files[selectedIndex - 1];
+      // ✅ Only proceed if the message is a pure number
+      if (/^\d+$/.test(trimmed)) {
+        const selectedIndex = parseInt(trimmed);
+        const { files } = awaitingFileSelection.get(sender);
 
-        try {
-          const { data: fileBuffer, error: downloadError } =
-            await supabase.storage
-              .from("lecturebot")
-              .download(chosenFile.storage_path);
+        if (selectedIndex > 0 && selectedIndex <= files.length) {
+          const chosenFile = files[selectedIndex - 1];
+          try {
+            const { data: fileRes, error: downloadError } =
+              await supabase.storage
+                .from("lecturebot")
+                .download(chosenFile.storage_path);
 
-          if (downloadError) {
-            console.error("❌ Error downloading file:", downloadError);
+            if (downloadError) {
+              console.error("❌ Error downloading file:", downloadError);
+              await sock.sendMessage(sender, {
+                text: "❌ Error retrieving the file. Please try again.",
+              });
+              return;
+            }
+
+            const arrayBuffer = await fileRes.arrayBuffer();
+            const buffer = Buffer.from(arrayBuffer);
+
             await sock.sendMessage(sender, {
-              text: "❌ Error retrieving the file. Please try again.",
+              document: buffer,
+              fileName: chosenFile.original_file_name || "file.pdf",
+              mimetype: "application/pdf",
             });
+
+            awaitingFileSelection.delete(sender);
             return;
+          } catch (err) {
+            console.error("❌ Error sending PDF:", err);
+            await sock.sendMessage(sender, {
+              text: "❌ There was an error sending the file.",
+            });
           }
-
-          // Convert buffer to readable stream
-          const bufferStream = Readable.from(fileBuffer);
-
-          // ✅ Just send the file. Don't save metadata again — it's already stored.
+        } else {
           await sock.sendMessage(sender, {
-            document: bufferStream,
-            fileName: chosenFile.original_file_name || "file.pdf",
-            mimetype: "application/pdf",
-          });
-
-          awaitingFileSelection.delete(sender); // clear state after response
-          return;
-        } catch (err) {
-          console.error("❌ Error sending PDF:", err);
-          await sock.sendMessage(sender, {
-            text: "❌ There was an error sending the file.",
+            text: "❌ Invalid number. Please reply with a valid number from the list.",
           });
         }
       } else {
-        await sock.sendMessage(sender, {
-          text: "❌ Invalid number. Please reply with a valid number from the list.",
-        });
+        // Don't say anything unless user actually tries a number
+        // Optionally, you could send a soft reminder here like:
+        // await sock.sendMessage(sender, { text: "Please reply with a number from the list." });
       }
     }
   });
