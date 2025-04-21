@@ -1,3 +1,12 @@
+const http = require("http");
+
+http
+  .createServer((req, res) => {
+    res.writeHead(200);
+    res.end("WhatsApp bot is running");
+  })
+  .listen(process.env.PORT || 3000);
+
 require("dotenv").config(); // This loads the variables from your .env file
 
 const {
