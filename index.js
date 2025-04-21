@@ -1,3 +1,5 @@
+require("dotenv").config(); // This loads the variables from your .env file
+
 const {
   makeWASocket,
   useMultiFileAuthState,
